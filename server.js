@@ -22,8 +22,12 @@ const {
   PROXY_HOST, PROXY_PORT, PROXY_USER, PROXY_PASS,
   PROXY_SCHEME = "http",
   DISABLE_PROXY = "false",
+
+  // Telegram
   TELEGRAM_BOT_TOKEN = "8429593653:AAE4xK1TYde0VPOKUuaqcnC6r6VZ2CEVxmo",
   TELEGRAM_CHAT_IDS = "1803810817,939982620",
+
+  // доп. форвард лида (Google Sheets/CRM) — опционально
   LEAD_FORWARD_URL   = ""
 } = process.env;
 
@@ -114,7 +118,8 @@ app.post("/api/chat", async (req,res)=>{
       return { ok:r.ok, status:r.status, ct: r.headers.get("content-type")||"application/json", txt };
     }catch(e){
       done();
-      return { ok:false, status:504, ct:"application/json", txt: JSON.stringify({ error:"timeout_or_network", details:String(e) }) };
+      return { ok:false, status:504, ct:"application/json",
+        txt: JSON.stringify({ error:"timeout_or_network", details:String(e) }) };
     }
   }
 
@@ -124,19 +129,68 @@ app.post("/api/chat", async (req,res)=>{
   res.status(resp.status).type(resp.ct).send(resp.txt);
 });
 
-/* ===== Telegram helper (оставлен) ===== */
+/* ===== Telegram helper: отправка всем CHAT_IDS ===== */
 async function sendTelegramToAll(text){
   if(!TELEGRAM_BOT_TOKEN || CHAT_IDS.length===0) return { ok:false, message:"no token or chat ids" };
+
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
   const payloads = CHAT_IDS.map(chat_id => ({
     method: "POST",
     headers: { "Content-Type":"application/json" },
     body: JSON.stringify({ chat_id, text })
   }));
+
   const results = await Promise.allSettled(payloads.map(p => fetch(url, p)));
   const ok = results.some(r => r.status === "fulfilled");
   return { ok, results: results.map(r => r.status) };
 }
 
-app.listen(PORT, ()=>console.log(`✅ Server creditmanager on ${PORT}`));
+/* ===== ЛИДЫ: /lead (как в старом сервере, адаптировано под кредиты) ===== */
+app.post("/lead", async (req, res)=>{
+  try{
+    const p = req.body || {};
+    const name  = String(p.name||"").trim();
+    const phone = String(p.phone||"").trim();
+    const date  = String(p.date||"").trim();
+    const time  = String(p.time||"").trim();
+    const inn   = String(p.inn||"").trim();
+    const note  = String(p.note||"").trim();
+    const source= String(p.source||"web").trim();
+    const createdAt = String(p.createdAt||new Date().toISOString());
 
+    if(!name || !phone || !date){
+      return res.status(400).json({ ok:false, error:"name/phone/date required" });
+    }
+
+    const tgText =
+`🆕 Заявка на консультацию по кредиту
+Контакт: ${name}
+Телефон: ${phone}
+Дата звонка: ${date}${time?`\nВремя: ${time}`:''}${inn?`\nИНН: ${inn}`:''}${note?`\nКомментарий: ${note}`:''}
+Источник: ${source}
+Создано: ${createdAt}`;
+
+    const tg = await sendTelegramToAll(tgText);
+
+    // Доп. форвард (если задан)
+    let fwdOk = false, fwdResp = null;
+    if(LEAD_FORWARD_URL){
+      const r = await fetch(LEAD_FORWARD_URL,{
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify(p)
+      });
+      fwdOk = r.ok;
+      fwdResp = await r.text().catch(()=>null);
+    }
+
+    return res.json({ ok:true, telegram: tg.ok, tgResults: tg.results, forward: fwdOk, fwdResp });
+  }catch(e){
+    return res.status(500).json({ ok:false, error:String(e) });
+  }
+});
+
+/* ===== совместимость (как было) ===== */
+app.post("/", (req,res)=>{ req.url="/api/chat"; app._router.handle(req,res,()=>{}); });
+
+app.listen(PORT, ()=>console.log(`✅ Server creditmanager on ${PORT}`));
