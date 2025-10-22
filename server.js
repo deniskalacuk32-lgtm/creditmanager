@@ -26,13 +26,11 @@ const {
   TELEGRAM_BOT_TOKEN = "8429593653:AAE4xK1TYde0VPOKUuaqcnC6r6VZ2CEVxmo",
   TELEGRAM_CHAT_IDS = "1803810817,939982620",
 
-  LEAD_FORWARD_URL   = "" // опционально
+  LEAD_FORWARD_URL = ""
 } = process.env;
 
 const CHAT_IDS = String(TELEGRAM_CHAT_IDS || "")
-  .split(",")
-  .map(s => s.trim())
-  .filter(Boolean);
+  .split(",").map(s => s.trim()).filter(Boolean);
 
 const useProxy = String(DISABLE_PROXY).toLowerCase() !== "true";
 const scheme = (PROXY_SCHEME || "http").toLowerCase();
@@ -41,30 +39,18 @@ const agent = useProxy ? new HttpsProxyAgent(proxyUrl) : undefined;
 
 const abort = (ms)=>{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),ms); return {signal:c.signal, done:()=>clearTimeout(t)}; };
 
-/* ==== SYSTEM PROMPT (Кредитный менеджер) ==== */
+/* ==== SYSTEM PROMPT ==== */
 const SYSTEM_PROMPT = `
-Ты — кредитный менеджер, специалист по сопровождению и помощи предпринимателям и юридическим лицам в получении кредитных продуктов.
-Всегда вежливый, уверенный, на «Вы». Первая фраза в новом диалоге: «Добрый день! Готов помочь вам в решении вашего кредитного вопроса.»
+Ты — кредитный менеджер, специалист по сопровождению предпринимателей и юрлиц.
+Всегда вежливый, уверенный, на «Вы». Первая фраза: «Добрый день! Готов помочь вам в решении вашего кредитного вопроса.»
 
-Цель:
-— Выяснить, предприниматель/юрлицо ли клиент.
-— Получить ИНН организации (не физлица).
-— Получить контактный номер телефона.
-— После получения этих данных — зафиксировать и сообщить, что заявка передана в работу: «Спасибо! Данные переданы в работу. Сейчас наш специалист всё проверит и свяжется с вами для обсуждения условий. Ожидайте звонка.»
+Цель: 1) понять, ИП/юрлицо; 2) получить ИНН организации; 3) получить телефон; 4) подтвердить приём в работу:
+«Спасибо! Данные переданы в работу. Сейчас наш специалист всё проверит и свяжется с вами для обсуждения условий. Ожидайте звонка.»
 
-Логика:
-— Мы помогаем даже в сложных ситуациях; у нас опыт и инструменты, но не даём пустых гарантий.
-— По ИНН проверяем компанию и подбираем доступные продукты.
-— Возражения:
-   * «А вы точно поможете?» → «Не обещаем заранее, но у нас большой опыт…»
-   * «Зачем ИНН?» → «Чтобы проверить компанию и доступные продукты.»
-   * «Сколько стоит?» → «1% от выданного кредита, оплата после выдачи.»
-   * «Договор?» → «Можем заключить, но работаем и на доверии.»
+Мы помогаем даже в сложных кейсах, но без пустых гарантий. По ИНН проверяем доступные продукты.
+Цена: 1% от выданного кредита, оплата после выдачи. Договор возможен.
 
-Правила интерфейсной логики:
-— Если клиент не указал ФИО и год рождения, кратко попроси указать их одним сообщением (пример: «Иванов Иван Иванович, 1986») — если это нужно по сценарию.
-— После получения ИНН и телефона подтверди фиксацию и передачу заявки в работу.
-— Отвечай кратко и по существу, 1–2 предложения.
+Отвечай кратко (1–2 предложения), без длинных вступлений.
 `;
 
 /* ===== helpers ===== */
@@ -96,7 +82,7 @@ app.post("/api/chat", async (req,res)=>{
         body: JSON.stringify({
           model: "gpt-4o-mini-2024-07-18",
           input,
-          max_output_tokens: 80,   // короче → быстрее
+          max_output_tokens: 80,
           temperature: 0.7
         }),
         signal
@@ -110,7 +96,6 @@ app.post("/api/chat", async (req,res)=>{
     }
   }
 
-  // Надёжный ретрай как раньше
   let resp = await callOnce(25000);
   if (!resp.ok) resp = await callOnce(30000);
 
@@ -120,20 +105,18 @@ app.post("/api/chat", async (req,res)=>{
 /* ===== Telegram helper ===== */
 async function sendTelegramToAll(text){
   if(!TELEGRAM_BOT_TOKEN || CHAT_IDS.length===0) return { ok:false, message:"no token or chat ids" };
-
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
   const payloads = CHAT_IDS.map(chat_id => ({
     method: "POST",
     headers: { "Content-Type":"application/json" },
     body: JSON.stringify({ chat_id, text })
   }));
-
   const results = await Promise.allSettled(payloads.map(p => fetch(url, p)));
   const ok = results.some(r => r.status === "fulfilled");
   return { ok, results: results.map(r => r.status) };
 }
 
-/* ===== ЛИДЫ: /lead ===== */
+/* ===== /lead ===== */
 app.post("/lead", async (req, res)=>{
   try{
     const p = req.body || {};
@@ -160,7 +143,6 @@ app.post("/lead", async (req, res)=>{
 
     const tg = await sendTelegramToAll(tgText);
 
-    // Доп. форвард (если задан)
     let fwdOk = false, fwdResp = null;
     if(LEAD_FORWARD_URL){
       const r = await fetch(LEAD_FORWARD_URL,{
@@ -183,7 +165,7 @@ app.post("/", (req,res)=>{ req.url="/api/chat"; app._router.handle(req,res,()=>{
 
 app.listen(PORT, ()=>console.log(`✅ Server creditmanager on ${PORT}`));
 
-/* ==== Keep Render awake (необязательно, но полезно) ==== */
+/* ==== Keep Render awake ==== */
 setInterval(() => {
   fetch(`https://creditmanager.onrender.com/health`).catch(()=>{});
-}, 240000); // каждые ~4 минуты
+}, 240000);
